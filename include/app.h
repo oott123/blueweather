@@ -3,9 +3,9 @@
 
 #include <stdio.h>
 
-#define PRINT_RAW(msg) UART1_SendString(msg, sizeof(msg))
+#define PRINT_RAW(msg) UART1_SendString((uint8_t *)msg, sizeof(msg))
 void bw_print_log(const char *fmt, ...);
-void HardFault_Handler(void) __attribute__((interrupt("WCH-Interrupt-fast")));
+void key_callback(uint8_t keys);
 
 #define RAW_DEBUG(msg) PRINT_RAW("[DEBUG] " msg "\r\n")
 #define RAW_INFO(msg) PRINT_RAW("[INFO] " msg "\r\n")

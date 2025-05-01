@@ -1,6 +1,9 @@
 #include "CH58x_common.h"
+#include "CH58xBLE_LIB.h"
+#include "HAL.h"
 #include "app_i2c.h"
 #include "app.h"
+#include "bthome.h"
 
 #include <stdio.h>
 #include <stdarg.h>
@@ -8,57 +11,38 @@
 #define MASTER_ADDR     (0x21 << 1)
 #define AHT10_ADDR      (0x38 << 1)
 
+__attribute__((aligned(4))) uint32_t MEM_BUF[BLE_MEMHEAP_SIZE / 4];
+
 void bw_print_log(const char *fmt, ...) {
-  char buffer[128];
+  uint8_t buffer[128];
   int len = 0;
 
   va_list args;
   va_start(args, fmt);
-  len = vsprintf(buffer, fmt, args);
+  len = vsprintf((char *)buffer, fmt, args);
   va_end(args);
 
   if (len > 0) {
     UART1_SendString(buffer, len);
   } else {
-    UART1_SendString("Error: print_log\r\n", 17);
+    UART1_SendString((uint8_t *)"Error: print_log\r\n", 17);
   }
 }
 
-// https://www.wch.cn/bbs/thread-114686-1.html
-// 把这段代码加入到你的工程里，可以实现不断电，不下拉PB22，直接进入ISP模式做USB升级。
-void run_romisp() {
-  // 这里读一下CSR, 触发异常进入机器模式。
-  // 如果已经是机器模式则继续运行。
-  read_csr(mstatus);
-
-  PFIC->IRER[0] = 0xffffffff;
-  PFIC->IRER[1] = 0xffffffff;
-
-  // 复制固件代码到ram
-  memcpy((void*)0x20003800, (void*)0x000780a4, 0x2500);
-  // 0x200038be是检测PB22的。这里让它强制返回1，跳过检测。
-  *(uint16_t*)0x200038be = 0x4505; // li a0, 1
-  // 清BSS
-  memset((void*)0x20005c18, 0, 0x04a8);
-
-  // 设置运行环境并跳转
-  __asm__("la gp, 0x20006410\n");
-  __asm__("la sp, 0x20008000\n");
-  write_csr(mstatus, 0x88);
-  write_csr(mtvec, 0x20003801);
-  write_csr(mepc, 0x20004ebc);
-  __asm__("mret");
-  __asm__("nop");
-  __asm__("nop");
-}
-
-void HardFault_Handler(void)
-{
-  run_romisp();
+__HIGH_CODE
+void run_romisp_force(void) {
+  FLASH_ROM_ERASE(0, 4096);
+  FLASH_ROM_SW_RESET();
+  R8_SAFE_ACCESS_SIG = SAFE_ACCESS_SIG1;
+  R8_SAFE_ACCESS_SIG = SAFE_ACCESS_SIG2;
+  SAFEOPERATE;
+  R16_INT32K_TUNE = 0xFFFF;
+  R8_RST_WDOG_CTRL |= RB_SOFTWARE_RESET;
+  R8_SAFE_ACCESS_SIG = 0;
   while(1);
 }
 
-void write_data(uint8_t *cmd, uint8_t len) {
+void write_data(const uint8_t *cmd, uint8_t len) {
   while(I2C_GetFlagStatus(I2C_FLAG_BUSY) != RESET);
 
   I2C_GenerateSTART(ENABLE);
@@ -107,6 +91,9 @@ const uint8_t cmd_measure[3] = {0xac, 0x33, 0x08};
 int main() {
   SetSysClock(CLK_SOURCE_PLL_60MHz);
 
+  GPIOA_ModeCfg(GPIO_Pin_All, GPIO_ModeIN_PU);
+  GPIOB_ModeCfg(GPIO_Pin_All, GPIO_ModeIN_PU);
+
   // UART1: TXD-PA9, RXD-PA8
   GPIOA_SetBits(GPIO_Pin_9);
   GPIOA_ModeCfg(GPIO_Pin_8, GPIO_ModeIN_PU);
@@ -119,6 +106,22 @@ int main() {
 
   I2C_Init(I2C_Mode_I2C, 400000, I2C_DutyCycle_16_9, I2C_Ack_Enable, I2C_AckAddr_7bit, MASTER_ADDR);
   RAW_DEBUG("[I2C] init success!");
+
+  // BLE
+  CH58X_BLEInit();
+  RAW_DEBUG("[BLE] BLE init success!");
+  HAL_Init();
+  HalKeyConfig(key_callback);
+  RAW_DEBUG("[BLE] HAL init success!");
+  GAPRole_BroadcasterInit();
+  RAW_DEBUG("[BLE] GAPRole_BroadcasterInit success!");
+  bthome_init();
+  RAW_DEBUG("[BLE] bthome_init success!");
+
+  RAW_DEBUG("[Main] Starting main loop...");
+  while (1) {
+    TMOS_SystemProcess();
+  }
 
   uint8_t calEnable = 0;
   uint8_t busy = 0;
@@ -165,8 +168,13 @@ int main() {
     }
   }
 
-  RAW_DEBUG("[MAIN] Program end, entering flash mode...");
-  run_romisp();
-  RAW_DEBUG("[MAIN] Flash mode failed.");
   while (1);
+}
+
+void key_callback(uint8_t keys) {
+  if (keys & HAL_KEY_SW_1) {
+    RAW_DEBUG("[KEY] Key 1 pressed");
+    run_romisp_force();
+    while (1);
+  }
 }
