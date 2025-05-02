@@ -29,17 +29,10 @@ static uint8_t scanRspData[] = {
 // GAP - Advertisement data (max size = 31 bytes, though this is
 // best kept short to conserve power while advertisting)
 static uint8_t advertData[] = {
-  // Flags; this sets the device to use limited discoverable
-  // mode (advertises for 30 seconds at a time) instead of general
-  // discoverable mode (advertises indefinitely)
-  0x02, // length of this data
+  2,
   GAP_ADTYPE_FLAGS,
   GAP_ADTYPE_FLAGS_BREDR_NOT_SUPPORTED,
 
-  // Broadcast of the data
-  0x03, // length of this data including the data type byte
-  GAP_ADTYPE_MANUFACTURER_SPECIFIC, // manufacturer specific advertisement data type
-  0, 0,
   12,
   GAP_ADTYPE_LOCAL_NAME_COMPLETE, 'B', 'l', 'u', 'e', 'w', 'e', 'a', 't', 'h', 'e', 'r',
 };
@@ -148,29 +141,40 @@ uint16_t bthome_broadcaster_process_event(uint8_t task_id, uint16_t events) {
       ret = i2c_write_to(aht10_addr, aht10_cmd_measure, sizeof(aht10_cmd_measure), 1, 1);
       if (ret == 0) {
         aht10_status = 1;
+        // 等 75ms 后读
+        tmos_start_task(broadcaster_task_id, SBP_ADV_UPDATE, MS1_TO_SYSTEM_TIME(75));
       } else {
         LOG_ERROR("[AHT10] write failed, ret: %d", ret);
+        // 写入有问题，重启 I2C
         aht10_status = 0;
+        I2C_SoftwareResetCmd(ENABLE);
+        I2C_SoftwareResetCmd(DISABLE);
+        tmos_start_task(broadcaster_task_id, SBP_ADV_UPDATE, MS1_TO_SYSTEM_TIME(1000));
       }
     } else if (aht10_status == 1) {
       // 读测量值
       ret = i2c_read_from(aht10_addr, aht10_rx_buffer, sizeof(aht10_rx_buffer), 1, 300);
+      ret = aht10_process_rx(aht10_rx_buffer, ret);
       aht10_status = 0;
-      ret = aht10_process_rx(aht10_rx_buffer, sizeof(aht10_rx_buffer));
       if (ret == 2) {
         // 校准
         ret = i2c_write_to(aht10_addr, aht10_cmd_init, sizeof(aht10_cmd_init), 1, 1);
         if (ret != 0) {
           LOG_ERROR("[AHT10] calibration failed, ret: %d", ret);
         }
+        tmos_start_task(broadcaster_task_id, SBP_ADV_UPDATE, MS1_TO_SYSTEM_TIME(1000));
       } else if (ret != 0) {
         LOG_ERROR("[AHT10] process rx failed, ret: %d", ret);
+        // 读取有问题，重启 I2C
+        I2C_SoftwareResetCmd(ENABLE);
+        I2C_SoftwareResetCmd(DISABLE);
+        tmos_start_task(broadcaster_task_id, SBP_ADV_UPDATE, MS1_TO_SYSTEM_TIME(1000));
+      } else {
+        // 更新成功，等比较长时间后进行下一次更新
+        GAP_UpdateAdvertisingData(broadcaster_task_id, TRUE, sizeof(advertData_update), advertData_update);
+        tmos_start_task(broadcaster_task_id, SBP_ADV_UPDATE, MS1_TO_SYSTEM_TIME(10000));
       }
     }
-
-    // Update advert
-    GAP_UpdateAdvertisingData(broadcaster_task_id, TRUE, sizeof(advertData_update), advertData_update);
-    tmos_start_task(broadcaster_task_id, SBP_ADV_UPDATE, MS1_TO_SYSTEM_TIME(10000));
 
     return (events ^ SBP_ADV_UPDATE);
   }
