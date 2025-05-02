@@ -1,9 +1,10 @@
 #include "CH58x_common.h"
 #include "CH58xBLE_LIB.h"
 #include "HAL.h"
-#include "app_i2c.h"
 #include "app.h"
 #include "bthome.h"
+#include "tmi2c.h"
+#include "log.h"
 
 #include <stdio.h>
 #include <stdarg.h>
@@ -12,22 +13,6 @@
 #define AHT10_ADDR      (0x38 << 1)
 
 __attribute__((aligned(4))) uint32_t MEM_BUF[BLE_MEMHEAP_SIZE / 4];
-
-void bw_print_log(const char *fmt, ...) {
-  uint8_t buffer[128];
-  int len = 0;
-
-  va_list args;
-  va_start(args, fmt);
-  len = vsprintf((char *)buffer, fmt, args);
-  va_end(args);
-
-  if (len > 0) {
-    UART1_SendString(buffer, len);
-  } else {
-    UART1_SendString((uint8_t *)"Error: print_log\r\n", 17);
-  }
-}
 
 __HIGH_CODE
 void run_romisp_force(void) {
@@ -42,6 +27,7 @@ void run_romisp_force(void) {
   while(1);
 }
 
+#if 0
 void write_data(const uint8_t *cmd, uint8_t len) {
   while(I2C_GetFlagStatus(I2C_FLAG_BUSY) != RESET);
 
@@ -84,9 +70,18 @@ void read_data(uint8_t *rxData, uint8_t len) {
     }
   }  
 }
+#endif
 
 const uint8_t cmd_init[3] = {0xe1, 0x08, 0x00};
 const uint8_t cmd_measure[3] = {0xac, 0x33, 0x08};
+
+void key_callback(uint8_t keys) {
+  if (keys & HAL_KEY_SW_1) {
+    RAW_DEBUG("[KEY] Key 1 pressed");
+    run_romisp_force();
+    while (1);
+  }
+}
 
 int main() {
   SetSysClock(CLK_SOURCE_PLL_60MHz);
@@ -101,12 +96,6 @@ int main() {
   UART1_DefInit();
   RAW_DEBUG("[UART] init success!");
 
-  // I2C: SCL-PB13, SDA-PB12
-  GPIOB_ModeCfg(GPIO_Pin_13 | GPIO_Pin_12, GPIO_ModeIN_PU);
-
-  I2C_Init(I2C_Mode_I2C, 400000, I2C_DutyCycle_16_9, I2C_Ack_Enable, I2C_AckAddr_7bit, MASTER_ADDR);
-  RAW_DEBUG("[I2C] init success!");
-
   // BLE
   CH58X_BLEInit();
   RAW_DEBUG("[BLE] BLE init success!");
@@ -118,11 +107,16 @@ int main() {
   bthome_init();
   RAW_DEBUG("[BLE] bthome_init success!");
 
+  // I2C
+  i2c_app_init((0x21 << 1));
+  RAW_DEBUG("[I2C] init success!");
+
   RAW_DEBUG("[Main] Starting main loop...");
   while (1) {
     TMOS_SystemProcess();
   }
 
+#if 0
   uint8_t calEnable = 0;
   uint8_t busy = 0;
   uint8_t rxData[6];
@@ -167,14 +161,6 @@ int main() {
       break;
     }
   }
-
   while (1);
-}
-
-void key_callback(uint8_t keys) {
-  if (keys & HAL_KEY_SW_1) {
-    RAW_DEBUG("[KEY] Key 1 pressed");
-    run_romisp_force();
-    while (1);
-  }
+#endif
 }

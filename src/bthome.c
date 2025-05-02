@@ -1,5 +1,7 @@
 #include "CH58xBLE_LIB.h"
 #include "bthome.h"
+#include "app_i2c.h"
+#include "log.h"
 
 static uint8_t broadcaster_task_id;
 
@@ -43,20 +45,23 @@ static uint8_t advertData[] = {
 };
 
 static uint8_t advertData_update[] = {
-  // Flags; this sets the device to use limited discoverable
-  // mode (advertises for 30 seconds at a time) instead of general
-  // discoverable mode (advertises indefinitely)
-  0x02,// length of this data
-  GAP_ADTYPE_FLAGS,
-  GAP_ADTYPE_FLAGS_GENERAL | GAP_ADTYPE_FLAGS_BREDR_NOT_SUPPORTED,
+  // Flags
+  /* 0 */ 2,
+  /* 1 */ GAP_ADTYPE_FLAGS,
+  /* 2 */ GAP_ADTYPE_FLAGS_GENERAL | GAP_ADTYPE_FLAGS_BREDR_NOT_SUPPORTED,
 
-  0x0a,
-  GAP_ADTYPE_SERVICE_DATA,
-  // 0xD2FC4002C40903BF13 
-  0xd2, 0xfc, 0x40, 0x02, 0xc4, 0x09, 0x03, 0xbf, 0x13,
+  // Service Data
+  /* 3 */ 10,
+  /* 4 */ GAP_ADTYPE_SERVICE_DATA,
+  // UUID(D2FC) info(40) temperature(020000) humidity(030000)
+  /* 5 */ 0xd2, 0xfc, 0x40, 0x02,
+  /* 9 */ 0x00, 0x00, 0x03,
+  /* 12 */ 0x00, 0x00,
 
-  12,
-  GAP_ADTYPE_LOCAL_NAME_COMPLETE, 'B', 'l', 'u', 'e', 'w', 'e', 'a', 't', 'h', 'e', 'r',
+  // Local Name
+  /* 14 */ 12,
+  /* 15 */ GAP_ADTYPE_LOCAL_NAME_COMPLETE,
+  /* 16 */ 'B', 'l', 'u', 'e', 'w', 'e', 'a', 't', 'h', 'e', 'r',
 };
 
 uint16_t bthome_broadcaster_process_event(uint8_t task_id, uint16_t events);
@@ -74,6 +79,44 @@ static void bthome_process_tmos_msg(tmos_event_hdr_t *pMsg) {
 
 static void bthome_state_notification_cb(gapRole_States_t newState) {
   // noop
+}
+
+const uint8_t aht10_addr = 0x38;
+const uint8_t aht10_cmd_init[3] = {0xe1, 0x08, 0x00};
+const uint8_t aht10_cmd_measure[3] = {0xac, 0x33, 0x08};
+
+static uint8_t aht10_status = 0;
+static uint8_t aht10_rx_buffer[6];
+
+static float humidity = 0.0;
+static float temperature = 0.0;
+
+uint8_t aht10_process_rx(uint8_t *rxData, uint8_t len) {
+  if (len < 6) {
+    LOG_ERROR("[AHT10] read failed, expected 6 bytes, got %d", len);
+    return 1;
+  }
+
+  // Bit[3] 校准使能位
+  uint8_t calEnable = rxData[0] & 0x08;
+  // Bit[7] 忙位
+  uint8_t busy = rxData[0] & 0x80;
+
+  if (calEnable == 0) {
+    RAW_DEBUG("[AHT10] Need calibration");
+    return 2;
+  } else if (busy == 1) {
+    RAW_DEBUG("[AHT10] Busy");
+    return 3;
+  } else {
+    uint32_t SRH = (rxData[1]<<12) | (rxData[2]<<4) | (rxData[3]>>4);
+    uint32_t ST = ((rxData[3]&0x0f)<<16) | (rxData[4]<<8) | rxData[5];
+    humidity = (SRH * 100.0) / 1024.0 / 1024.0;
+    temperature = (ST * 200.0) / 1024.0 / 1024.0 - 50;
+    (*(uint16_t *)(advertData_update + 9)) = (uint16_t) (temperature * 100);
+    (*(uint16_t *)(advertData_update + 12)) = (uint16_t) (humidity * 100);
+    return 0;
+  }
 }
 
 uint16_t bthome_broadcaster_process_event(uint8_t task_id, uint16_t events) {
@@ -99,9 +142,35 @@ uint16_t bthome_broadcaster_process_event(uint8_t task_id, uint16_t events) {
   }
 
   if (events & SBP_ADV_UPDATE) {
+    int ret = 0;
+    if (aht10_status == 0) {
+      // 写测量命令
+      ret = i2c_write_to(aht10_addr, aht10_cmd_measure, sizeof(aht10_cmd_measure), 1, 1);
+      if (ret == 0) {
+        aht10_status = 1;
+      } else {
+        LOG_ERROR("[AHT10] write failed, ret: %d", ret);
+        aht10_status = 0;
+      }
+    } else if (aht10_status == 1) {
+      // 读测量值
+      ret = i2c_read_from(aht10_addr, aht10_rx_buffer, sizeof(aht10_rx_buffer), 1, 300);
+      aht10_status = 0;
+      ret = aht10_process_rx(aht10_rx_buffer, sizeof(aht10_rx_buffer));
+      if (ret == 2) {
+        // 校准
+        ret = i2c_write_to(aht10_addr, aht10_cmd_init, sizeof(aht10_cmd_init), 1, 1);
+        if (ret != 0) {
+          LOG_ERROR("[AHT10] calibration failed, ret: %d", ret);
+        }
+      } else if (ret != 0) {
+        LOG_ERROR("[AHT10] process rx failed, ret: %d", ret);
+      }
+    }
+
     // Update advert
     GAP_UpdateAdvertisingData(broadcaster_task_id, TRUE, sizeof(advertData_update), advertData_update);
-    tmos_start_task(broadcaster_task_id, SBP_ADV_UPDATE, MS1_TO_SYSTEM_TIME(1000));
+    tmos_start_task(broadcaster_task_id, SBP_ADV_UPDATE, MS1_TO_SYSTEM_TIME(10000));
 
     return (events ^ SBP_ADV_UPDATE);
   }
