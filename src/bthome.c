@@ -75,8 +75,8 @@ static void bthome_state_notification_cb(gapRole_States_t newState) {
 }
 
 const uint8_t aht10_addr = 0x38;
-const uint8_t aht10_cmd_init[3] = {0xe1, 0x08, 0x00};
-const uint8_t aht10_cmd_measure[3] = {0xac, 0x33, 0x08};
+const uint8_t aht10_cmd_init[3] = {0xbe, 0x08, 0x00};
+const uint8_t aht10_cmd_measure[3] = {0xac, 0x33, 0x00};
 
 static uint8_t aht10_status = 0;
 static uint8_t aht10_rx_buffer[6];
@@ -85,8 +85,8 @@ static float humidity = 0.0;
 static float temperature = 0.0;
 
 uint8_t aht10_process_rx(uint8_t *rxData, uint8_t len) {
-  if (len < 6) {
-    LOG_ERROR("[AHT10] read failed, expected 6 bytes, got %d", len);
+  if (len != 1 && len != 6) {
+    LOG_ERROR("[AHT10] read failed, expected 1 or 6 bytes, got %d", len);
     return 1;
   }
 
@@ -96,12 +96,16 @@ uint8_t aht10_process_rx(uint8_t *rxData, uint8_t len) {
   uint8_t busy = rxData[0] & 0x80;
 
   if (calEnable == 0) {
-    RAW_DEBUG("[AHT10] Need calibration");
+    LOG_DEBUG("[AHT10] Need calibration %d %x xxx", len, rxData[0]);
     return 2;
   } else if (busy == 1) {
     RAW_DEBUG("[AHT10] Busy");
     return 3;
   } else {
+    if (len < 6) {
+      LOG_ERROR("[AHT10] read failed, expected 6 bytes, got %d", len);
+      return 1;
+    }
     uint32_t SRH = (rxData[1]<<12) | (rxData[2]<<4) | (rxData[3]>>4);
     uint32_t ST = ((rxData[3]&0x0f)<<16) | (rxData[4]<<8) | rxData[5];
     humidity = (SRH * 100.0) / 1024.0 / 1024.0;
@@ -141,8 +145,8 @@ uint16_t bthome_broadcaster_process_event(uint8_t task_id, uint16_t events) {
       ret = i2c_write_to(aht10_addr, aht10_cmd_measure, sizeof(aht10_cmd_measure), 1, 1);
       if (ret == 0) {
         aht10_status = 1;
-        // 等 75ms 后读
-        tmos_start_task(broadcaster_task_id, SBP_ADV_UPDATE, MS1_TO_SYSTEM_TIME(75));
+        // 等 80ms 后读
+        tmos_start_task(broadcaster_task_id, SBP_ADV_UPDATE, MS1_TO_SYSTEM_TIME(80));
       } else {
         LOG_ERROR("[AHT10] write failed, ret: %d", ret);
         // 写入有问题，重启 I2C
@@ -153,7 +157,7 @@ uint16_t bthome_broadcaster_process_event(uint8_t task_id, uint16_t events) {
       }
     } else if (aht10_status == 1) {
       // 读测量值
-      ret = i2c_read_from(aht10_addr, aht10_rx_buffer, sizeof(aht10_rx_buffer), 1, 300);
+      ret = i2c_read_from(aht10_addr, aht10_rx_buffer, sizeof(aht10_rx_buffer), 1, 600);
       ret = aht10_process_rx(aht10_rx_buffer, ret);
       aht10_status = 0;
       if (ret == 2) {
@@ -165,9 +169,6 @@ uint16_t bthome_broadcaster_process_event(uint8_t task_id, uint16_t events) {
         tmos_start_task(broadcaster_task_id, SBP_ADV_UPDATE, MS1_TO_SYSTEM_TIME(1000));
       } else if (ret != 0) {
         LOG_ERROR("[AHT10] process rx failed, ret: %d", ret);
-        // 读取有问题，重启 I2C
-        I2C_SoftwareResetCmd(ENABLE);
-        I2C_SoftwareResetCmd(DISABLE);
         tmos_start_task(broadcaster_task_id, SBP_ADV_UPDATE, MS1_TO_SYSTEM_TIME(1000));
       } else {
         // 更新成功，等比较长时间后进行下一次更新

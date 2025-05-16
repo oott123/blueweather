@@ -94,7 +94,7 @@
 #define WAKE_UP_RTC_MAX_TIME                US_TO_RTC(1400)
 #endif
 #ifndef HAL_KEY
-#define HAL_KEY                             TRUE
+#define HAL_KEY                             FALSE
 #endif
 #ifndef HAL_LED
 #define HAL_LED                             FALSE

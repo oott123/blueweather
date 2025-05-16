@@ -4,6 +4,10 @@
 #include <stdarg.h>
 
 void log_print(const char *fmt, ...) {
+  if (!LOG_ENABLE) {
+    return;
+  }
+
   uint8_t buffer[128];
   int len = 0;
 

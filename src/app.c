@@ -44,12 +44,14 @@ int main() {
   GPIOA_ModeCfg(GPIO_Pin_All, GPIO_ModeIN_PU);
   GPIOB_ModeCfg(GPIO_Pin_All, GPIO_ModeIN_PU);
 
-  // UART1: TXD-PA9, RXD-PA8
-  GPIOA_SetBits(GPIO_Pin_9);
-  GPIOA_ModeCfg(GPIO_Pin_8, GPIO_ModeIN_PU);
-  GPIOA_ModeCfg(GPIO_Pin_9, GPIO_ModeOut_PP_5mA);
-  UART1_DefInit();
-  RAW_DEBUG("[UART] init success!");
+  if (LOG_ENABLE) {
+    // UART1: TXD-PA9, RXD-PA8
+    GPIOA_SetBits(GPIO_Pin_9);
+    GPIOA_ModeCfg(GPIO_Pin_8, GPIO_ModeIN_PU);
+    GPIOA_ModeCfg(GPIO_Pin_9, GPIO_ModeOut_PP_5mA);
+    UART1_DefInit();
+    RAW_DEBUG("[UART] init success!");
+  }
 
   // BLE
   CH58X_BLEInit();
@@ -65,6 +67,11 @@ int main() {
   // I2C
   i2c_app_init((0x21 << 1));
   RAW_DEBUG("[I2C] init success!");
+
+  // AHT20: PB7 - VOAHT
+  GPIOB_ModeCfg(GPIO_Pin_7, GPIO_ModeOut_PP_20mA);
+  GPIOB_SetBits(GPIO_Pin_7);
+  RAW_DEBUG("[AHT20] power on!");
 
   RAW_DEBUG("[Main] Starting main loop...");
   while (1) {
