@@ -4,7 +4,11 @@
 
 ## 编译
 
-使用 platformio `pio run` 即可。
+1. 安装 [PlatformIO](https://docs.platformio.org/en/latest/core/installation/index.html)
+2. 安装 [CH32V PlatformIO platform](https://github.com/Community-PIO-CH32V/platform-ch32v#installation-see-docs)
+3. 运行 `pio run`
+
+编译产出在 `.pio/build/genericCH582F/firmware.bin`
 
 ## 使用
 
